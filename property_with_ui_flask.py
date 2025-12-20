@@ -843,10 +843,39 @@ def export_csv():
     if not scraping_status["results"]:
         return jsonify({"error": "No data"}), 400
 
-    keys = set()
-    for r in scraping_status["results"]:
-        keys.update(r.keys())
-    keys = sorted(list(keys))
+    return send_file(
+        output, mimetype="text/csv", as_attachment=True, download_name=filename
+    )
+
+
+@app.route("/import_csv", methods=["POST"])
+def import_csv_route():
+    global scraping_status
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "No file selected"}), 400
+
+    try:
+        if file:
+            # Parse CSV using pandas
+            df = pd.read_csv(file)
+            # Convert NaN to None/Empty string for JSON compatibility
+            df = df.fillna("")
+
+            # Update results
+            results = df.to_dict("records")
+            scraping_status["results"] = results
+            scraping_status["properties_found"] = len(results)
+            scraping_status["message"] = f"Imported {len(results)} properties from CSV"
+
+            return jsonify(
+                {"status": "success", "count": len(results), "results": results}
+            )
+    except Exception as e:
+        return jsonify({"error": f"Failed to parse CSV: {str(e)}"}), 500
 
     # Write header
     cw.writerow(keys)

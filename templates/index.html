@@ -190,13 +190,10 @@
         /* Results Table Styles */
         .results-section {
             margin-top: 30px;
-            display: none;
-        }
-
-        .results-section.active {
             display: block;
         }
 
+        /* Always block to ensure visibility */
         .results-header {
             display: flex;
             justify-content: space-between;
@@ -215,6 +212,7 @@
             display: flex;
             gap: 10px;
             align-items: center;
+            flex-wrap: wrap;
         }
 
         .search-box {
@@ -226,6 +224,14 @@
         }
 
         .price-filter {
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            width: 150px;
+            font-size: 14px;
+        }
+
+        .builder-filter {
             padding: 8px 12px;
             border: 2px solid #e0e0e0;
             border-radius: 8px;
@@ -324,7 +330,7 @@
             color: #666;
         }
 
-        .export-btn {
+        .action-btn {
             padding: 8px 16px;
             background: #28a745;
             color: white;
@@ -332,10 +338,19 @@
             border-radius: 5px;
             cursor: pointer;
             font-weight: 600;
+            margin-left: 5px;
         }
 
-        .export-btn:hover {
+        .action-btn:hover {
             background: #218838;
+        }
+
+        .import-btn {
+            background: #17a2b8;
+        }
+
+        .import-btn:hover {
+            background: #138496;
         }
 
         .stop-btn {
@@ -346,6 +361,10 @@
 
         .stop-btn:hover {
             background: #c82333;
+        }
+
+        .hidden-input {
+            display: none;
         }
     </style>
 </head>
@@ -430,15 +449,24 @@
                 Results (New Tab)</button>
         </div>
 
+        <!-- Hidden input for file upload -->
+        <input type="file" id="csvFileInput" class="hidden-input" accept=".csv" onchange="handleFileUpload(this)">
+
         <div class="results-section" id="resultsSection">
             <div class="results-header">
-                <h2>🏠 Live Results: <span id="resultCount">0</span></h2>
+                <h2>🏠 Results: <span id="resultCount">0</span></h2>
                 <div class="filter-controls">
                     <input type="text" class="search-box" id="tableSearch" placeholder="🔍 Search text..."
                         oninput="filterTable()">
-                    <input type="number" class="price-filter" id="priceFilter" placeholder="Max Price (Lakhs)"
+                    <input type="number" class="price-filter" id="priceFilter" placeholder="Max Price (L)"
                         oninput="filterTable()">
-                    <button class="export-btn" onclick="window.location.href='/export'">📥 CSV</button>
+                    <select class="builder-filter" id="builderFilter" onchange="filterTable()">
+                        <option value="all">All Builders</option>
+                        <option value="preferred">Preferred Only</option>
+                    </select>
+                    <button class="action-btn import-btn" onclick="document.getElementById('csvFileInput').click()">📂
+                        Import CSV</button>
+                    <button class="action-btn" onclick="window.location.href='/export'">📥 Export CSV</button>
                 </div>
             </div>
             <div class="table-container">
@@ -473,7 +501,7 @@
             allResults = [];
             document.getElementById('resultsBody').innerHTML = '';
             document.getElementById('resultCount').textContent = '0';
-            document.getElementById('resultsSection').style.display = 'none';
+            // document.getElementById('resultsSection').style.display = 'none'; // REMOVE THIS to keep table visible if desired, or keep it. I'll comment it out to be safe based on user feedback.
 
             const sites = {
                 '99acres': document.getElementById('site_99acres').checked,
@@ -541,12 +569,10 @@
 
                     if (data.results && data.results.length > 0) {
                         allResults = data.results;
-                        // Only update if filter is empty to avoid interrupting user interaction
-                        if (!document.getElementById('tableSearch').value && !document.getElementById('priceFilter').value) {
+                        if (isFilterEmpty()) {
                             populateTable(allResults);
-                        } else {
-                            filterTable(); // Re-apply filters on new data
                         }
+                        // Ensure section is visible
                         document.getElementById('resultsSection').style.display = 'block';
                     }
 
@@ -561,6 +587,31 @@
                 .catch(err => console.log('Status check failed', err));
         }
 
+        function handleFileUpload(input) {
+            if (input.files && input.files[0]) {
+                const formData = new FormData();
+                formData.append('file', input.files[0]);
+
+                fetch('/import_csv', {
+                    method: 'POST',
+                    body: formData
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            allResults = data.results;
+                            populateTable(allResults);
+                            document.getElementById('resultsSection').style.display = 'block';
+                            document.getElementById('propertiesFound').textContent = data.count;
+                            alert('Imported ' + data.count + ' properties successfully!');
+                        } else {
+                            alert('Import failed: ' + data.error);
+                        }
+                    })
+                    .catch(err => alert('Error uploading file: ' + err));
+            }
+        }
+
         function populateTable(results) {
             const tbody = document.getElementById('resultsBody');
             tbody.innerHTML = '';
@@ -569,7 +620,7 @@
             results.forEach(prop => {
                 const source = prop['Source'] || 'Unknown';
                 const sourceClass = 'source-' + source.toLowerCase().replace('.', '').replace(' ', '');
-                const isPreferred = prop['Preferred Builder'] && prop['Preferred Builder'].includes('⭐');
+                const isPreferred = (prop['Preferred Builder'] && prop['Preferred Builder'].includes('⭐')) || false;
 
                 const row = document.createElement('tr');
                 if (isPreferred) row.classList.add('preferred-row');
@@ -597,9 +648,16 @@
             return num; // Returns price in Lakhs
         }
 
+        function isFilterEmpty() {
+            return !document.getElementById('tableSearch').value &&
+                !document.getElementById('priceFilter').value &&
+                document.getElementById('builderFilter').value === 'all';
+        }
+
         function filterTable() {
             const term = document.getElementById('tableSearch').value.toLowerCase();
             const maxPrice = parseFloat(document.getElementById('priceFilter').value);
+            const builderPref = document.getElementById('builderFilter').value;
 
             const filtered = allResults.filter(p => {
                 // Text search
@@ -614,7 +672,13 @@
                     }
                 }
 
-                return matchesText && matchesPrice;
+                // Builder filter
+                let matchesBuilder = true;
+                if (builderPref === 'preferred') {
+                    matchesBuilder = p['Preferred Builder'] && p['Preferred Builder'].includes('⭐');
+                }
+
+                return matchesText && matchesPrice && matchesBuilder;
             });
             populateTable(filtered);
         }
