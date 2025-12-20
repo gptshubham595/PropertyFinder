@@ -253,8 +253,11 @@ class PropertyFinder:
 
             try:
                 self.driver.get(url)
+                # Ensure temp directory exists
+                if not os.path.exists("temp"):
+                    os.makedirs("temp")
                 # Save screenshot for debugging
-                self.driver.save_screenshot(f"debug_99acres_page_{page}.png")
+                self.driver.save_screenshot(f"temp/debug_99acres_page_{page}.png")
                 self.random_delay(3, 5)
 
                 # Scrolling to trigger lazy loading
@@ -406,7 +409,7 @@ class PropertyFinder:
                             else "No"
                         )
 
-                        self.add_property(property_data)
+                        self.add_property("99acres", property_data)
                         properties_found += 1
 
                     except Exception as e:
