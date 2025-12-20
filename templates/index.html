@@ -325,6 +325,11 @@
             color: #2e7d32;
         }
 
+        .source-nobroker {
+            background: #e0f2f1;
+            color: #00695c;
+        }
+
         .source-unknown {
             background: #f0f0f0;
             color: #666;
@@ -389,6 +394,8 @@
                             id="site_magicbricks" checked style="width: auto;"> MagicBricks</label>
                     <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;"><input type="checkbox"
                             id="site_housing" checked style="width: auto;"> Housing.com</label>
+                    <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;"><input type="checkbox"
+                            id="site_nobroker" checked style="width: auto;"> NoBroker</label>
                 </div>
             </div>
 
@@ -505,7 +512,8 @@
             const sites = {
                 '99acres': document.getElementById('site_99acres').checked,
                 'magicbricks': document.getElementById('site_magicbricks').checked,
-                'housing': document.getElementById('site_housing').checked
+                'housing': document.getElementById('site_housing').checked,
+                'nobroker': document.getElementById('site_nobroker').checked
             };
 
             const payload = {

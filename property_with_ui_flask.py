@@ -9,7 +9,10 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import re
+import math
+import io
 import os
+import csv
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
 from threading import Thread
 import json
@@ -127,6 +130,18 @@ class PropertyFinder:
                 pass
 
         self.driver = webdriver.Chrome(service=service, options=chrome_options)
+
+        # Ensure screenshots directory exists
+        os.makedirs("screenshots", exist_ok=True)
+
+    def take_screenshot(self, site_name, page_num):
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"screenshots/{site_name}_page{page_num}_{timestamp}.png"
+            self.driver.save_screenshot(filename)
+            print(f"Screenshot saved: {filename}")
+        except Exception as e:
+            print(f"Screenshot error: {e}")
 
     def random_delay(self, min_sec=2, max_sec=5):
         time.sleep(random.uniform(min_sec, max_sec))
@@ -277,10 +292,10 @@ class PropertyFinder:
 
                 soup = BeautifulSoup(self.driver.page_source, "html.parser")
 
-                # ROBUST SELECTORS 2024
-                # srpTuple__tuple, projectTuple__tuple, outerTupleWrap, tupleWrap
+                # ROBUST SELECTORS 2024 - Updated based on browser inspection
+                # tupleNew__tupleWrap is the new standard
                 property_boxes = soup.select(
-                    ".srpTuple__tuple, .projectTuple__tuple, [class*='outerTupleWrap'], [class*='tupleWrap'], div[class*='tuple']"
+                    ".tupleNew__tupleWrap, .srpTuple__tuple, .projectTuple__tuple, [class*='outerTupleWrap'], [class*='tupleWrap'], div[class*='tuple']"
                 )
 
                 print(f"Found {len(property_boxes)} property boxes")  # Debug
@@ -298,10 +313,9 @@ class PropertyFinder:
                     try:
                         property_data = {}
 
-                        # Extract Title
-                        # srpTuple__propertyName, projectTuple__projectName
+                        # Extract Title - Updated selectors
                         title_elem = prop.select_one(
-                            ".srpTuple__propertyName, .projectTuple__projectName, [class*='propertyHeading'], [class*='projectHeading'], h2"
+                            ".tupleNew__propertyHeading, .tupleNew__propType, .srpTuple__propertyName, .projectTuple__projectName, [class*='propertyHeading'], [class*='projectHeading'], h2"
                         )
                         property_data["property"] = (
                             title_elem.text.strip()
@@ -309,19 +323,18 @@ class PropertyFinder:
                             else "Unknown Property"
                         )
 
-                        # Extract Builder / Project
-                        # srpTuple__builderName
+                        # Extract Builder / Project - Updated selectors
                         project_elem = prop.select_one(
-                            ".srpTuple__builderName, [class*='locationName'], [class*='tupleHeading']"
+                            ".tupleNew__locationName, .srpTuple__builderName, [class*='locationName'], [class*='tupleHeading']"
                         )
                         property_data["project"] = (
                             project_elem.text.strip() if project_elem else None
                         )
                         property_data["builder"] = property_data["project"]  # Fallback
 
-                        # Extract Price
+                        # Extract Price - Updated selectors
                         price_elem = prop.select_one(
-                            "#srp_tuple_price, .srpTuple__price, [class*='priceVal'], [class*='priceWrap'], [class*='ccl2']"
+                            ".tupleNew__priceValWrap, #srp_tuple_price, .srpTuple__price, [class*='priceVal'], [class*='priceWrap'], [class*='ccl2']"
                         )
                         property_data["price"] = (
                             price_elem.text.strip() if price_elem else None
@@ -331,15 +344,14 @@ class PropertyFinder:
                             property_data["price"]
                         )
 
-                        # Client-side Budget Filtering (Crucial if URL param is removed)
-                        # self.budget_max is in absolute (e.g., 8000000)
+                        # Client-side Budget Filtering
                         if self.budget_max and property_data["price_numeric"]:
                             if property_data["price_numeric"] > self.budget_max:
                                 continue
 
-                        # Extract Area
+                        # Extract Area - Updated selectors
                         area_elem = prop.select_one(
-                            "#srp_tuple_primary_area, .srpTuple__primaryArea, [class*='totolAreaWrap'], [class*='area1Type'], [class*='areaVal']"
+                            ".tupleNew__area1Type, #srp_tuple_primary_area, .srpTuple__primaryArea, [class*='totolAreaWrap'], [class*='area1Type'], [class*='areaVal']"
                         )
                         property_data["area"] = (
                             area_elem.text.strip() if area_elem else None
@@ -365,9 +377,9 @@ class PropertyFinder:
                             else "Not Mentioned"
                         )
 
-                        # URL
+                        # URL - Updated selectors
                         link = prop.select_one(
-                            "a.body_med, a#srp_tuple_property_title, a.srpTuple__propertyName, [class*='tuple'] a"
+                            "a.tupleNew__propertyHeading, a.body_med, a#srp_tuple_property_title, a.srpTuple__propertyName, [class*='tuple'] a"
                         )
                         if not link:
                             link = prop.find("a", href=True)
@@ -408,6 +420,14 @@ class PropertyFinder:
                             if property_data["builder"]
                             else "No"
                         )
+
+                        # VALIDATION: Skip if essential data is missing
+                        if (
+                            property_data["property"] == "Unknown Property"
+                            and not property_data["price"]
+                        ) or (not property_data["price"] and not property_data["area"]):
+                            print("Skipping incomplete property data")
+                            continue
 
                         self.add_property("99acres", property_data)
                         properties_found += 1
@@ -466,16 +486,22 @@ class PropertyFinder:
                         property_data = {}
 
                         try:
-                            title_elem = prop.find("h2", class_="mb-srp__card--title")
+                            # Updated title selector
+                            title_elem = prop.select_one(
+                                ".mb-srp__card--title, h2.mb-srp__card__title"
+                            )
                             property_data["property"] = (
-                                title_elem.text.strip() if title_elem else None
+                                title_elem.text.strip()
+                                if title_elem
+                                else "Unknown Property"
                             )
                         except:
-                            property_data["property"] = None
+                            property_data["property"] = "Unknown Property"
 
                         try:
-                            project_elem = prop.find(
-                                "a", class_="mb-srp__card__society--name"
+                            # Updated project/builder selector
+                            project_elem = prop.select_one(
+                                ".mb-srp__card__society--name, .mb-srp__card__developer--name"
                             )
                             property_data["project"] = (
                                 project_elem.text.strip() if project_elem else None
@@ -486,8 +512,9 @@ class PropertyFinder:
                         property_data["builder"] = property_data["project"]
 
                         try:
-                            price_elem = prop.find(
-                                "div", class_="mb-srp__card__price--amount"
+                            # Updated price selector
+                            price_elem = prop.select_one(
+                                ".mb-srp__card__price--amount, .mb-srp__card__price"
                             )
                             property_data["price"] = (
                                 price_elem.text.strip() if price_elem else None
@@ -499,38 +526,29 @@ class PropertyFinder:
                             property_data["price"]
                         )
 
+                        # Area extraction using summary values
                         try:
-                            # Area is in a summary structure
-                            # <div class="mb-srp__card__summary--label">Super Area</div>
-                            # <div class="mb-srp__card__summary--value">1150 sqft</div>
-                            # Use data-summary attribute if possible, else look for text
                             area_value = None
-                            summary_elems = prop.find_all(
-                                "div", class_="mb-srp__card__summary--value"
+                            # Look for label "SUPER AREA" or "CARPET AREA"
+                            summary_labels = prop.select(
+                                ".mb-srp__card__summary--label"
                             )
-                            for elem in summary_elems:
-                                parent = elem.parent
-                                if (
-                                    parent
-                                    and "area" in parent.get("data-summary", "").lower()
-                                ):
-                                    area_value = elem.text.strip()
-                                    break
-                                # Fallback to looking at label sibling
-                                label = elem.find_previous_sibling(
-                                    "div", class_="mb-srp__card__summary--label"
-                                )
-                                if label and "area" in label.text.lower():
-                                    area_value = elem.text.strip()
-                                    break
+                            for label in summary_labels:
+                                if "area" in label.text.lower():
+                                    val_elem = label.find_next_sibling(
+                                        "div", class_="mb-srp__card__summary--value"
+                                    )
+                                    if val_elem:
+                                        area_value = val_elem.text.strip()
+                                        break
 
                             property_data["area"] = area_value
                             property_data["area_in_sq.ft"] = property_data["area"]
+                            property_data["area_in_sq.m"] = None
                         except:
                             property_data["area"] = None
                             property_data["area_in_sq.ft"] = None
-
-                        property_data["area_in_sq.m"] = None
+                            property_data["area_in_sq.m"] = None
 
                         property_data["rera"] = (
                             "Yes"
@@ -644,113 +662,65 @@ class PropertyFinder:
                     pass  # Continue even if wait times out
 
                 soup = BeautifulSoup(self.driver.page_source, "html.parser")
-                property_boxes = soup.find_all(
-                    "article", attrs={"data-testid": "card-container"}
-                )
-
-                if not property_boxes:
-                    break
-
-                for prop in property_boxes:
-                    if not scraping_status["running"]:
-                        break
+                try:
                     try:
-                        property_data = {}
-
-                        try:
-                            # Housing.com places title inside an 'a' tag or h2
-                            title_elem = prop.find("h2", class_="title-style")
-                            property_data["property"] = (
-                                title_elem.text.strip() if title_elem else None
-                            )
-                        except:
-                            property_data["property"] = None
-
-                        try:
-                            # Project/Builder usually in subtitle
-                            subtitle_elem = prop.find(
-                                "div", attrs={"data-q": "subtitle"}
-                            )
-                            property_data["builder"] = (
-                                subtitle_elem.text.strip() if subtitle_elem else None
-                            )
-                        except:
-                            property_data["builder"] = None
-
-                        property_data["project"] = property_data["builder"]
-
-                        try:
-                            price_elem = prop.find("div", attrs={"data-q": "price"})
-                            property_data["price"] = (
-                                price_elem.text.strip() if price_elem else None
-                            )
-                        except:
-                            property_data["price"] = None
-
-                        property_data["price_numeric"] = self.extract_price_numeric(
-                            property_data["price"]
+                        area_elem = prop.find("div", attrs={"data-q": "builtup-area"})
+                        property_data["area"] = (
+                            area_elem.text.strip() if area_elem else None
                         )
+                        property_data["area_in_sq.ft"] = property_data["area"]
+                    except:
+                        property_data["area"] = None
+                        property_data["area_in_sq.ft"] = None
 
-                        try:
-                            area_elem = prop.find(
-                                "div", attrs={"data-q": "builtup-area"}
+                    property_data["area_in_sq.m"] = None
+                    property_data["rating"] = None
+                    property_data["price_per_sq.ft"] = None
+                    property_data["places_nearby"] = None
+                    property_data["description"] = None
+                    property_data["posted_date"] = None
+                    property_data["posted_by"] = None
+
+                    property_data["rera"] = (
+                        "Yes"
+                        if prop.find(string=re.compile("rera", re.I))
+                        else "Not Mentioned"
+                    )
+
+                    try:
+                        # Link is usually the parent of title or explicitly data-q="title"
+                        link_elem = prop.find("a", attrs={"data-q": "title"})
+                        if link_elem and link_elem.get("href"):
+                            href = link_elem.get("href")
+                            property_data["property_url"] = (
+                                "https://housing.com" + href
+                                if href.startswith("/")
+                                else href
                             )
-                            property_data["area"] = (
-                                area_elem.text.strip() if area_elem else None
-                            )
-                            property_data["area_in_sq.ft"] = property_data["area"]
-                        except:
-                            property_data["area"] = None
-                            property_data["area_in_sq.ft"] = None
-
-                        property_data["area_in_sq.m"] = None
-                        property_data["rating"] = None
-                        property_data["price_per_sq.ft"] = None
-                        property_data["places_nearby"] = None
-                        property_data["description"] = None
-                        property_data["posted_date"] = None
-                        property_data["posted_by"] = None
-
-                        property_data["rera"] = (
-                            "Yes"
-                            if prop.find(string=re.compile("rera", re.I))
-                            else "Not Mentioned"
-                        )
-
-                        try:
-                            # Link is usually the parent of title or explicitly data-q="title"
-                            link_elem = prop.find("a", attrs={"data-q": "title"})
-                            if link_elem and link_elem.get("href"):
-                                href = link_elem.get("href")
-                                property_data["property_url"] = (
-                                    "https://housing.com" + href
-                                    if href.startswith("/")
-                                    else href
-                                )
-                            else:
-                                property_data["property_url"] = None
-                        except:
+                        else:
                             property_data["property_url"] = None
+                    except:
+                        property_data["property_url"] = None
 
-                        bhk_text = f"{property_data['property']}"
-                        property_data["bhk"] = self.extract_bhk(bhk_text)
+                    bhk_text = f"{property_data['property']}"
+                    property_data["bhk"] = self.extract_bhk(bhk_text)
 
-                        is_preferred = self.check_preferred_builder(
-                            property_data["builder"]
+                    is_preferred = self.check_preferred_builder(
+                        property_data["builder"]
+                    )
+                    property_data["preferred_builder"] = (
+                        "⭐ YES" if is_preferred else "No"
+                    )
+
+                    if self.validate_property(property_data):
+                        self.add_property("Housing.com", property_data)
+                        properties_found += 1
+                        scraping_status["properties_found"] = len(
+                            self.all_data["Property"]
                         )
-                        property_data["preferred_builder"] = (
-                            "⭐ YES" if is_preferred else "No"
-                        )
 
-                        if self.validate_property(property_data):
-                            self.add_property("Housing.com", property_data)
-                            properties_found += 1
-                            scraping_status["properties_found"] = len(
-                                self.all_data["Property"]
-                            )
-
-                    except Exception as e:
-                        continue
+                except Exception as e:
+                    continue
 
                 self.random_delay(2, 4)
 
@@ -920,17 +890,6 @@ def import_csv_route():
             )
     except Exception as e:
         return jsonify({"error": f"Failed to parse CSV: {str(e)}"}), 500
-
-    # Write header
-    cw.writerow(keys)
-
-    # Write data
-    for r in scraping_status["results"]:
-        cw.writerow([r.get(k, "") for k in keys])
-
-    output = io.BytesIO()
-    output.write(si.getvalue().encode("utf-8-sig"))
-    output.seek(0)
 
     filename = f"bangalore_properties_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     return send_file(
@@ -1234,541 +1193,318 @@ if __name__ == "__main__":
     os.makedirs("templates", exist_ok=True)
 
     # Save index template
-    with open("templates/index.html", "w") as f:
-        f.write(
-            """<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bangalore Property Finder</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            padding: 40px;
-        }
-        h1 {
-            color: #333;
-            text-align: center;
-            margin-bottom: 10px;
-            font-size: 32px;
-        }
-        .subtitle {
-            text-align: center;
-            color: #666;
-            margin-bottom: 30px;
-            font-size: 16px;
-        }
-        .control-panel {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            border: 2px solid #e0e0e0;
-            margin-bottom: 20px;
-        }
-        .input-group {
-            margin-bottom: 20px;
-        }
-        .input-group label {
-            display: block;
-            margin-bottom: 8px;
-            color: #333;
-            font-weight: 600;
-        }
-        .input-group input, .input-group select {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            font-size: 16px;
-            transition: border-color 0.3s;
-        }
-        .input-group input:focus, .input-group select:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        .slider-container {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .slider-value {
-            font-weight: bold;
-            color: #667eea;
-            width: 80px;
-        }
-        .btn {
-            width: 100%;
-            padding: 15px;
-            font-size: 18px;
-            font-weight: 600;
-            color: white;
-            background: #667eea;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: background 0.3s;
-        }
-        .btn:hover {
-            background: #556cd6;
-        }
-        .btn:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-        }
-        .status-panel {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 10px;
-            margin-top: 20px;
-            display: none;
-        }
-        .status-panel.active { display: block; }
-        .progress-bar {
-            width: 100%;
-            height: 30px;
-            background: #e0e0e0;
-            border-radius: 15px;
-            overflow: hidden;
-            margin: 15px 0;
-        }
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-            transition: width 0.5s;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: 600;
-        }
-        .status-message {
-            text-align: center;
-            color: #333;
-            margin: 10px 0;
-            font-size: 16px;
-        }
-        .stats {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 15px;
-            margin-top: 20px;
-        }
-        .stat-card {
-            background: white;
-            padding: 15px;
-            border-radius: 8px;
-            text-align: center;
-            border: 2px solid #667eea;
-        }
-        .stat-value {
-            font-size: 28px;
-            font-weight: bold;
-            color: #667eea;
-        }
-        .stat-label {
-            color: #666;
-            font-size: 14px;
-            margin-top: 5px;
-        }
-        .btn-secondary {
-            background: #28a745;
-            color: white;
-            margin-top: 15px;
-        }
-        .btn-secondary:hover {
-            background: #218838;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🏠 Bangalore Property Finder</h1>
-        <p class="subtitle">Customize your search criteria below</p>
-        
-        <div class="control-panel">
-            <!-- Pages -->
-            <div class="input-group">
-                <label for="pages">Pages to scrape per website:</label>
-                <input type="number" id="pages" value="5" min="1" max="10">
-            </div>
+    #     with open("templates/index.html", "w") as f:
+    #         f.write(
+    #             """<!DOCTYPE html>
+    # <html lang="en">
+    # <head>
+    #     <meta charset="UTF-8">
+    #     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    #     <title>Bangalore Property Finder</title>
+    #     <style>
+    #         * { margin: 0; padding: 0; box-sizing: border-box; }
+    #         body {
+    #             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    #             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    #             min-height: 100vh;
+    #             padding: 20px;
+    #         }
+    #         .container {
+    #             max-width: 800px;
+    #             margin: 0 auto;
+    #             background: white;
+    #             border-radius: 20px;
+    #             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    #             padding: 40px;
+    #         }
+    #         h1 {
+    #             color: #333;
+    #             text-align: center;
+    #             margin-bottom: 10px;
+    #             font-size: 32px;
+    #         }
+    #         .subtitle {
+    #             text-align: center;
+    #             color: #666;
+    #             margin-bottom: 30px;
+    #             font-size: 16px;
+    #         }
+    #         .control-panel {
+    #             background: white;
+    #             padding: 20px;
+    #             border-radius: 10px;
+    #             border: 2px solid #e0e0e0;
+    #             margin-bottom: 20px;
+    #         }
+    #         .input-group {
+    #             margin-bottom: 20px;
+    #         }
+    #         .input-group label {
+    #             display: block;
+    #             margin-bottom: 8px;
+    #             color: #333;
+    #             font-weight: 600;
+    #         }
+    #         .input-group input, .input-group select {
+    #             width: 100%;
+    #             padding: 12px;
+    #             border: 2px solid #e0e0e0;
+    #             border-radius: 8px;
+    #             font-size: 16px;
+    #             transition: border-color 0.3s;
+    #         }
+    #         .input-group input:focus, .input-group select:focus {
+    #             outline: none;
+    #             border-color: #667eea;
+    #         }
+    #         .slider-container {
+    #             display: flex;
+    #             align-items: center;
+    #             gap: 10px;
+    #         }
+    #         .slider-value {
+    #             font-weight: bold;
+    #             color: #667eea;
+    #             width: 80px;
+    #         }
+    #         .btn {
+    #             width: 100%;
+    #             padding: 15px;
+    #             font-size: 18px;
+    #             font-weight: 600;
+    #             color: white;
+    #             background: #667eea;
+    #             border: none;
+    #             border-radius: 8px;
+    #             cursor: pointer;
+    #             transition: background 0.3s;
+    #         }
+    #         .btn:hover {
+    #             background: #556cd6;
+    #         }
+    #         .btn:disabled {
+    #             background: #ccc;
+    #             cursor: not-allowed;
+    #         }
+    #         .status-panel {
+    #             background: #f8f9fa;
+    #             padding: 20px;
+    #             border-radius: 10px;
+    #             margin-top: 20px;
+    #             display: none;
+    #         }
+    #         .status-panel.active { display: block; }
+    #         .progress-bar {
+    #             width: 100%;
+    #             height: 30px;
+    #             background: #e0e0e0;
+    #             border-radius: 15px;
+    #             overflow: hidden;
+    #             margin: 15px 0;
+    #         }
+    #         .progress-fill {
+    #             height: 100%;
+    #             background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+    #             transition: width 0.5s;
+    #             display: flex;
+    #             align-items: center;
+    #             justify-content: center;
+    #             color: white;
+    #             font-weight: 600;
+    #         }
+    #         .status-message {
+    #             text-align: center;
+    #             color: #333;
+    #             margin: 10px 0;
+    #             font-size: 16px;
+    #         }
+    #         .stats {
+    #             display: grid;
+    #             grid-template-columns: repeat(2, 1fr);
+    #             gap: 15px;
+    #             margin-top: 20px;
+    #         }
+    #         .stat-card {
+    #             background: white;
+    #             padding: 15px;
+    #             border-radius: 8px;
+    #             text-align: center;
+    #             border: 2px solid #667eea;
+    #         }
+    #         .stat-value {
+    #             font-size: 28px;
+    #             font-weight: bold;
+    #             color: #667eea;
+    #         }
+    #         .stat-label {
+    #             color: #666;
+    #             font-size: 14px;
+    #             margin-top: 5px;
+    #         }
+    #         .btn-secondary {
+    #             background: #28a745;
+    #             color: white;
+    #             margin-top: 15px;
+    #         }
+    #         .btn-secondary:hover {
+    #             background: #218838;
+    #         }
+    #     </style>
+    # </head>
+    # <body>
+    #     <div class="container">
+    #         <h1>🏠 Bangalore Property Finder</h1>
+    #         <p class="subtitle">Customize your search criteria below</p>
 
-            <!-- Property Type -->
-            <div class="input-group">
-                <label for="bhk">Property Type:</label>
-                <select id="bhk">
-                    <option value="2,3" selected>2 BHK & 3 BHK</option>
-                    <option value="2">2 BHK Only</option>
-                    <option value="3">3 BHK Only</option>
-                </select>
-            </div>
+    #         <div class="control-panel">
+    #             <!-- Pages -->
+    #             <div class="input-group">
+    #                 <label for="pages">Pages to scrape per website:</label>
+    #                 <input type="number" id="pages" value="5" min="1" max="10">
+    #             </div>
 
-            <!-- Budget Slider -->
-            <div class="input-group">
-                <label for="budget">Max Budget (Lakhs):</label>
-                <div class="slider-container">
-                    <input type="range" id="budget" min="10" max="200" value="80" oninput="updateBudgetDisplay(this.value)">
-                    <span class="slider-value" id="budgetValue">₹80 L</span>
-                </div>
-            </div>
+    #             <!-- Property Type -->
+    #             <div class="input-group">
+    #                 <label for="bhk">Property Type:</label>
+    #                 <select id="bhk">
+    #                     <option value="2,3" selected>2 BHK & 3 BHK</option>
+    #                     <option value="2">2 BHK Only</option>
+    #                     <option value="3">3 BHK Only</option>
+    #                 </select>
+    #             </div>
 
-            <!-- RERA Verified -->
-            <div class="input-group">
-                <label for="rera">RERA Verified:</label>
-                <select id="rera">
-                    <option value="Yes" selected>Yes (Verified Only)</option>
-                    <option value="No">No / Any</option>
-                </select>
-            </div>
+    #             <!-- Budget Slider -->
+    #             <div class="input-group">
+    #                 <label for="budget">Max Budget (Lakhs):</label>
+    #                 <div class="slider-container">
+    #                     <input type="range" id="budget" min="10" max="200" value="80" oninput="updateBudgetDisplay(this.value)">
+    #                     <span class="slider-value" id="budgetValue">₹80 L</span>
+    #                 </div>
+    #             </div>
 
-            <!-- Preferred Builder -->
-            <div class="input-group">
-                <label for="preferred">Preferred Builders Only:</label>
-                <select id="preferred">
-                    <option value="false" selected>No (Show All)</option>
-                    <option value="true">Yes (Prestige, Sobha, etc.)</option>
-                </select>
-            </div>
+    #             <!-- RERA Verified -->
+    #             <div class="input-group">
+    #                 <label for="rera">RERA Verified:</label>
+    #                 <select id="rera">
+    #                     <option value="Yes" selected>Yes (Verified Only)</option>
+    #                     <option value="No">No / Any</option>
+    #                 </select>
+    #             </div>
 
-            <button class="btn" onclick="startScraping()" id="startBtn">
-                Start Property Search
-            </button>
-        </div>
-        
-        <div class="status-panel" id="statusPanel">
-            <div class="progress-bar">
-                <div class="progress-fill" id="progressBar" style="width: 0%">0%</div>
-            </div>
-            <div class="status-message" id="statusMessage">Initializing...</div>
-            <div class="stats">
-                <div class="stat-card">
-                    <div class="stat-value" id="propertiesFound">0</div>
-                    <div class="stat-label">Properties Found</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value" id="currentSite">-</div>
-                    <div class="stat-label">Current Source</div>
-                </div>
-            </div>
-            <button class="btn btn-secondary" onclick="viewResults()" id="viewResultsBtn" style="display: none;">
-                View Results
-            </button>
-        </div>
-    </div>
-    
-    <script>
-        let statusInterval;
+    #             <!-- Preferred Builder -->
+    #             <div class="input-group">
+    #                 <label for="preferred">Preferred Builders Only:</label>
+    #                 <select id="preferred">
+    #                     <option value="false" selected>No (Show All)</option>
+    #                     <option value="true">Yes (Prestige, Sobha, etc.)</option>
+    #                 </select>
+    #             </div>
 
-        function updateBudgetDisplay(val) {
-            document.getElementById('budgetValue').textContent = '₹' + val + ' L';
-        }
-        
-        function startScraping() {
-            const pages = document.getElementById('pages').value;
-            const bhk = document.getElementById('bhk').value;
-            const budget = document.getElementById('budget').value;
-            const rera = document.getElementById('rera').value;
-            const preferred = document.getElementById('preferred').value === 'true';
+    #             <button class="btn" onclick="startScraping()" id="startBtn">
+    #                 Start Property Search
+    #             </button>
+    #         </div>
 
-            const startBtn = document.getElementById('startBtn');
-            const statusPanel = document.getElementById('statusPanel');
-            
-            startBtn.disabled = true;
-            startBtn.textContent = 'Scraping in progress...';
-            statusPanel.classList.add('active');
-            
-            fetch('/start_scraping', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    pages: parseInt(pages),
-                    bhk: bhk.split(','),
-                    budget: parseInt(budget),
-                    rera: rera,
-                    preferred: preferred
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                statusInterval = setInterval(updateStatus, 1000);
-            })
-            .catch(error => {
-                alert('Error starting scraper: ' + error);
-                startBtn.disabled = false;
-                startBtn.textContent = 'Start Property Search';
-            });
-        }
-        
-        function updateStatus() {
-            fetch('/status')
-            .then(response => response.json())
-            .then(data => {
-                document.getElementById('statusMessage').textContent = data.message;
-                document.getElementById('propertiesFound').textContent = data.properties_found;
-                document.getElementById('currentSite').textContent = data.current_site || '-';
-                
-                const progress = data.running ? 50 : (data.results ? 100 : 0);
-                const progressBar = document.getElementById('progressBar');
-                progressBar.style.width = progress + '%';
-                progressBar.textContent = progress + '%';
-                
-                if (!data.running && data.results) {
-                    clearInterval(statusInterval);
-                    document.getElementById('viewResultsBtn').style.display = 'block';
-                    document.getElementById('startBtn').disabled = false;
-                    document.getElementById('startBtn').textContent = 'Start Property Search';
-                }
-            });
-        }
-        
-        function viewResults() {
-            window.location.href = '/results';
-        }
-    </script>
-</body>
-</html>"""
-        )
+    #         <div class="status-panel" id="statusPanel">
+    #             <div class="progress-bar">
+    #                 <div class="progress-fill" id="progressBar" style="width: 0%">0%</div>
+    #             </div>
+    #             <div class="status-message" id="statusMessage">Initializing...</div>
+    #             <div class="stats">
+    #                 <div class="stat-card">
+    #                     <div class="stat-value" id="propertiesFound">0</div>
+    #                     <div class="stat-label">Properties Found</div>
+    #                 </div>
+    #                 <div class="stat-card">
+    #                     <div class="stat-value" id="currentSite">-</div>
+    #                     <div class="stat-label">Current Source</div>
+    #                 </div>
+    #             </div>
+    #             <button class="btn btn-secondary" onclick="viewResults()" id="viewResultsBtn" style="display: none;">
+    #                 View Results
+    #             </button>
+    #         </div>
+    #     </div>
+
+    #     <script>
+    #         let statusInterval;
+
+    #         function updateBudgetDisplay(val) {
+    #             document.getElementById('budgetValue').textContent = '₹' + val + ' L';
+    #         }
+
+    #         function startScraping() {
+    #             const pages = document.getElementById('pages').value;
+    #             const bhk = document.getElementById('bhk').value;
+    #             const budget = document.getElementById('budget').value;
+    #             const rera = document.getElementById('rera').value;
+    #             const preferred = document.getElementById('preferred').value === 'true';
+
+    #             const startBtn = document.getElementById('startBtn');
+    #             const statusPanel = document.getElementById('statusPanel');
+
+    #             startBtn.disabled = true;
+    #             startBtn.textContent = 'Scraping in progress...';
+    #             statusPanel.classList.add('active');
+
+    #             fetch('/start_scraping', {
+    #                 method: 'POST',
+    #                 headers: { 'Content-Type': 'application/json' },
+    #                 body: JSON.stringify({
+    #                     pages: parseInt(pages),
+    #                     bhk: bhk.split(','),
+    #                     budget: parseInt(budget),
+    #                     rera: rera,
+    #                     preferred: preferred
+    #                 })
+    #             })
+    #             .then(response => response.json())
+    #             .then(data => {
+    #                 statusInterval = setInterval(updateStatus, 1000);
+    #             })
+    #             .catch(error => {
+    #                 alert('Error starting scraper: ' + error);
+    #                 startBtn.disabled = false;
+    #                 startBtn.textContent = 'Start Property Search';
+    #             });
+    #         }
+
+    #         function updateStatus() {
+    #             fetch('/status')
+    #             .then(response => response.json())
+    #             .then(data => {
+    #                 document.getElementById('statusMessage').textContent = data.message;
+    #                 document.getElementById('propertiesFound').textContent = data.properties_found;
+    #                 document.getElementById('currentSite').textContent = data.current_site || '-';
+
+    #                 const progress = data.running ? 50 : (data.results ? 100 : 0);
+    #                 const progressBar = document.getElementById('progressBar');
+    #                 progressBar.style.width = progress + '%';
+    #                 progressBar.textContent = progress + '%';
+
+    #                 if (!data.running && data.results) {
+    #                     clearInterval(statusInterval);
+    #                     document.getElementById('viewResultsBtn').style.display = 'block';
+    #                     document.getElementById('startBtn').disabled = false;
+    #                     document.getElementById('startBtn').textContent = 'Start Property Search';
+    #                 }
+    #             });
+    #         }
+
+    #         function viewResults() {
+    #             window.location.href = '/results';
+    #         }
+    #     </script>
+    # </body>
+    # </html>"""
+    #         )
 
     # Save results template
-    with open("templates/results.html", "w") as f:
-        f.write(
-            """<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bangalore Property Results</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #f4f7f6;
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 30px;
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-        }
-        h1 { color: #333; }
-        .btn {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-weight: 600;
-            text-decoration: none;
-            display: inline-block;
-        }
-        .btn-primary {
-            background: #667eea;
-            color: white;
-            margin-left: 10px;
-        }
-        .btn-secondary {
-            background: #e0e0e0;
-            color: #333;
-        }
-        .property-list {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
-            gap: 20px;
-        }
-        .property-card {
-            background: white;
-            border-radius: 10px;
-            overflow: hidden;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
-            transition: transform 0.3s;
-            border-top: 4px solid transparent;
-        }
-        .property-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 15px 30px rgba(0,0,0,0.1);
-        }
-        .property-card.preferred {
-            border-top-color: #ffd700;
-        }
-        .card-header {
-            padding: 15px;
-            border-bottom: 1px solid #eee;
-            background: #fafafa;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .source-badge {
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: bold;
-        }
-        .source-99acres { background: #e3f2fd; color: #1565c0; }
-        .source-magicbricks { background: #ffebee; color: #c62828; }
-        .source-housing { background: #e8f5e9; color: #2e7d32; }
-        
-        .card-body {
-            padding: 20px;
-        }
-        .property-title {
-            font-size: 18px;
-            font-weight: bold;
-            margin-bottom: 5px;
-            color: #333;
-            line-height: 1.3;
-        }
-        .property-builder {
-            color: #666;
-            font-size: 14px;
-            margin-bottom: 15px;
-        }
-        .preferred-tag {
-            color: #f57f17;
-            font-weight: bold;
-            font-size: 12px;
-            margin-left: 5px;
-        }
-        .price {
-            font-size: 24px;
-            font-weight: bold;
-            color: #2e7d32;
-            margin-bottom: 15px;
-        }
-        .details-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 10px;
-            margin-bottom: 15px;
-            font-size: 14px;
-        }
-        .detail-item {
-            color: #555;
-        }
-        .detail-label {
-            color: #999;
-            display: block;
-            font-size: 12px;
-        }
-        .view-btn {
-            display: block;
-            width: 100%;
-            padding: 10px;
-            text-align: center;
-            background: #f8f9fa;
-            color: #333;
-            text-decoration: none;
-            border-radius: 5px;
-            font-weight: 600;
-            border: 1px solid #ddd;
-            transition: all 0.2s;
-        }
-        .view-btn:hover {
-            background: #667eea;
-            color: white;
-            border-color: #667eea;
-        }
-        .empty-state {
-            grid-column: 1 / -1;
-            text-align: center;
-            padding: 50px;
-            background: white;
-            border-radius: 10px;
-            color: #666;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>Property Search Results</h1>
-            <div>
-                <a href="/" class="btn btn-secondary">Back to Search</a>
-                <a href="/export" class="btn btn-primary">Export CSV</a>
-            </div>
-        </div>
-        
-        <div class="property-list">
-            {% if properties %}
-                {% for prop in properties %}
-                <div class="property-card {% if '⭐' in prop['Preferred Builder']|string %}preferred{% endif %}">
-                    <div class="card-header">
-                        <span class="source-badge source-{{ prop['Source'].lower().replace('.', '') }}">
-                            {{ prop['Source'] }}
-                        </span>
-                        {% if '⭐' in prop['Preferred Builder']|string %}
-                        <span class="preferred-tag">⭐ PREFERRED BUILDER</span>
-                        {% endif %}
-                    </div>
-                    <div class="card-body">
-                        <div class="property-title">
-                            {{ prop['Property'] or prop['Project'] or 'Details Not Available' }}
-                        </div>
-                        <div class="property-builder">
-                            {{ prop['Builder'] or 'Builder Not Specified' }}
-                        </div>
-                        
-                        <div class="price">
-                            {{ prop['Price'] or 'Price on Request' }}
-                        </div>
-                        
-                        <div class="details-grid">
-                            <div class="detail-item">
-                                <span class="detail-label">Type</span>
-                                {{ prop['BHK'] or '-' }} BHK
-                            </div>
-                            <div class="detail-item">
-                                <span class="detail-label">Area</span>
-                                {{ prop['Area in Sq.ft'] or '-' }}
-                            </div>
-                            <div class="detail-item">
-                                <span class="detail-label">RERA</span>
-                                {{ prop['RERA'] }}
-                            </div>
-                            <div class="detail-item">
-                                <span class="detail-label">Nearby</span>
-                                <span title="{{ prop['Places Nearby'] }}">
-                                    {{ (prop['Places Nearby'] or '-')[:15] }}...
-                                </span>
-                            </div>
-                        </div>
-                        
-                        <a href="{{ prop['Property URL'] }}" target="_blank" class="view-btn">
-                            View Property
-                        </a>
-                    </div>
-                </div>
-                {% endfor %}
-            {% else %}
-                <div class="empty-state">
-                    <h2>No properties found</h2>
-                    <p>Try adjusting your search criteria or scraping more pages.</p>
-                </div>
-            {% endif %}
-        </div>
-    </div>
-</body>
-</html>"""
-        )
+    #     with open("templates/results.html", "w") as f:
+    #         f.write(
+    #             """<!DOCTYPE html>
+    # ... (template content ommitted for brevity) ...
+    # </html>"""
+    #         )
 
     app.run(debug=True, port=5001)
