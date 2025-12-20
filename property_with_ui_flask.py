@@ -98,7 +98,7 @@ class PropertyFinder:
         """Setup Chrome driver"""
         service = Service(self.driver_path)
         chrome_options = Options()
-        chrome_options.add_argument("--headless")
+        # chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
@@ -206,18 +206,36 @@ class PropertyFinder:
         return True
 
     def build_99acres_url(self, page=1):
-        base = "https://www.99acres.com/search/property/buy/bangalore"
+        # Use the FFID URL which is more reliable
+        base = "https://www.99acres.com/property-in-bangalore-ffid"
+
+        # safely handle BHK list
+        if isinstance(self.bedrooms, list):
+            bhk_list = self.bedrooms
+        else:
+            bhk_list = str(self.bedrooms).split(",")
+
+        # 99acres uses simpler codes or comma values for bedrooms
+        # typically: 2,3
+        bedroom_str = ",".join([str(b).strip() for b in bhk_list])
+
         params = [
-            "city=20",
-            "bedroom_num=2,3",
-            "preference=S",
-            "area_unit=1",
-            "budget_max=80",
-            "res_com=R",
-            "isPreLeased=N",
+            "city=20",  # Bangalore
+            f"bedroom_num={bedroom_str}",
+            "preference=S",  # Sale
+            "area_unit=1",  # Sqft
+            "res_com=R",  # Residential
         ]
+
+        # Budget in 99acres is usually passed as min_budget and max_budget in absolute numbers or codes
+        # But robustly, we can filter on client side if URL params are tricky.
+        # However, let's try to pass 'budget_max' in Lakhs if that's what the old code did,
+        # or better, omit it to get more results and filter in Python (safest).
+        # We will filter in Python to ensure we don't get 0 results due to strict URL params.
+
         if page > 1:
             params.append(f"page={page}")
+
         return f"{base}?{'&'.join(params)}"
 
     def scrape_99acres(self, max_pages=5):
@@ -228,43 +246,48 @@ class PropertyFinder:
         for page in range(1, max_pages + 1):
             if not scraping_status["running"]:
                 break
+
             url = self.build_99acres_url(page)
+            print(f"Scraping URL: {url}")  # Debug log
             scraping_status["message"] = f"Scraping 99acres page {page}/{max_pages}"
 
             try:
                 self.driver.get(url)
+                # Save screenshot for debugging
+                self.driver.save_screenshot(f"debug_99acres_page_{page}.png")
                 self.random_delay(3, 5)
 
-                # Scrolling to trigger lazy loading of more results
-                for _ in range(3):
-                    self.driver.execute_script("window.scrollBy(0, 1000);")
+                # Scrolling to trigger lazy loading
+                for _ in range(5):  # Intead of 3, scroll more
+                    self.driver.execute_script("window.scrollBy(0, 1500);")
                     self.random_delay(1, 2)
 
-                # Wait for content to stabilize
+                # Wait for ANY property tuple
                 try:
                     WebDriverWait(self.driver, 10).until(
                         EC.presence_of_element_located(
-                            (By.CSS_SELECTOR, "[class*='outerTupleWrap']")
+                            (By.CSS_SELECTOR, "[class*='tuple'], [class*='Tuple']")
                         )
                     )
                 except:
-                    pass
+                    print("Timeout waiting for tuples")  # Debug
 
                 soup = BeautifulSoup(self.driver.page_source, "html.parser")
 
-                # Combine both premium and regular listing selectors
+                # ROBUST SELECTORS 2024
+                # srpTuple__tuple, projectTuple__tuple, outerTupleWrap, tupleWrap
                 property_boxes = soup.select(
-                    "[class*='outerTupleWrap'], [class*='tupleWrap']"
+                    ".srpTuple__tuple, .projectTuple__tuple, [class*='outerTupleWrap'], [class*='tupleWrap'], div[class*='tuple']"
                 )
 
-                if not property_boxes:
-                    # Try a fallback if standard tuples aren't found
-                    property_boxes = soup.find_all(
-                        "div", class_=re.compile(r"tuple", re.I)
-                    )
+                print(f"Found {len(property_boxes)} property boxes")  # Debug
 
                 if not property_boxes:
-                    break
+                    print(
+                        "No property boxes found! Page source might be blocked or empty."
+                    )
+                    # Optionally save page source to debug if needed, but for now just continue
+                    continue
 
                 for prop in property_boxes:
                     if not scraping_status["running"]:
@@ -272,31 +295,30 @@ class PropertyFinder:
                     try:
                         property_data = {}
 
-                        # Extract Title - Broad search
+                        # Extract Title
+                        # srpTuple__propertyName, projectTuple__projectName
                         title_elem = prop.select_one(
-                            "[class*='propertyHeading'], [class*='projectHeading'], [class*='tupleHeading']"
+                            ".srpTuple__propertyName, .projectTuple__projectName, [class*='propertyHeading'], [class*='projectHeading'], h2"
                         )
                         property_data["property"] = (
-                            title_elem.text.strip() if title_elem else None
+                            title_elem.text.strip()
+                            if title_elem
+                            else "Unknown Property"
                         )
 
-                        if not property_data["property"]:
-                            # Try h2 inside the box
-                            h2 = prop.find("h2")
-                            property_data["property"] = h2.text.strip() if h2 else None
-
-                        # Extract Project/Location
+                        # Extract Builder / Project
+                        # srpTuple__builderName
                         project_elem = prop.select_one(
-                            "[class*='locationName'], [class*='tupleHeading']"
+                            ".srpTuple__builderName, [class*='locationName'], [class*='tupleHeading']"
                         )
                         property_data["project"] = (
                             project_elem.text.strip() if project_elem else None
                         )
-                        property_data["builder"] = property_data["project"]
+                        property_data["builder"] = property_data["project"]  # Fallback
 
-                        # Extract Price - Broad search
+                        # Extract Price
                         price_elem = prop.select_one(
-                            "[class*='priceVal'], [class*='priceWrap'], [class*='ccl2']"
+                            "#srp_tuple_price, .srpTuple__price, [class*='priceVal'], [class*='priceWrap'], [class*='ccl2']"
                         )
                         property_data["price"] = (
                             price_elem.text.strip() if price_elem else None
@@ -306,9 +328,15 @@ class PropertyFinder:
                             property_data["price"]
                         )
 
+                        # Client-side Budget Filtering (Crucial if URL param is removed)
+                        # self.budget_max is in absolute (e.g., 8000000)
+                        if self.budget_max and property_data["price_numeric"]:
+                            if property_data["price_numeric"] > self.budget_max:
+                                continue
+
                         # Extract Area
                         area_elem = prop.select_one(
-                            "[class*='totolAreaWrap'], [class*='area1Type'], [class*='areaVal']"
+                            "#srp_tuple_primary_area, .srpTuple__primaryArea, [class*='totolAreaWrap'], [class*='area1Type'], [class*='areaVal']"
                         )
                         property_data["area"] = (
                             area_elem.text.strip() if area_elem else None
@@ -316,16 +344,16 @@ class PropertyFinder:
                         property_data["area_in_sq.ft"] = property_data["area"]
                         property_data["area_in_sq.m"] = None
 
-                        # Price per sqft
-                        ppsf = prop.select_one(
-                            "[class*='perSqftWrap'], [class*='ppsf']"
+                        # Description / Configuration (BHK)
+                        # srpTuple__bedroomNum
+                        desc_elem = prop.select_one(
+                            ".srpTuple__bedroomNum, .srpTuple__configuration"
                         )
-                        property_data["price_per_sq.ft"] = (
-                            ppsf.text.strip() if ppsf else None
+                        property_data["description"] = (
+                            desc_elem.text.strip()
+                            if desc_elem
+                            else property_data["property"]
                         )
-
-                        # Description
-                        property_data["description"] = property_data["property"]
 
                         # RERA
                         property_data["rera"] = (
@@ -335,7 +363,12 @@ class PropertyFinder:
                         )
 
                         # URL
-                        link = prop.find("a", href=True)
+                        link = prop.select_one(
+                            "a.body_med, a#srp_tuple_property_title, a.srpTuple__propertyName, [class*='tuple'] a"
+                        )
+                        if not link:
+                            link = prop.find("a", href=True)
+
                         if link and link.get("href"):
                             href = link["href"]
                             property_data["property_url"] = (
@@ -346,38 +379,46 @@ class PropertyFinder:
                         else:
                             property_data["property_url"] = None
 
-                        # BHK
-                        bhk_text = f"{property_data['property'] or ''} {property_data['description'] or ''}"
-                        property_data["bhk"] = self.extract_bhk(bhk_text)
+                        # Simple BHK extraction from title or description
+                        text_for_bhk = (
+                            str(property_data["property"])
+                            + " "
+                            + str(property_data["description"])
+                        ).lower()
+                        bhk_found = "Unknown"
+                        if "1 bhk" in text_for_bhk or "1bhk" in text_for_bhk:
+                            bhk_found = "1"
+                        elif "2 bhk" in text_for_bhk or "2bhk" in text_for_bhk:
+                            bhk_found = "2"
+                        elif "3 bhk" in text_for_bhk or "3bhk" in text_for_bhk:
+                            bhk_found = "3"
+                        elif "4 bhk" in text_for_bhk or "4bhk" in text_for_bhk:
+                            bhk_found = "4"
 
-                        # Preferred Builder
-                        is_preferred = self.check_preferred_builder(
-                            property_data["builder"]
-                        )
+                        property_data["bhk"] = bhk_found
+
+                        property_data["source"] = "99acres"
+
+                        # Preferred Builder Check
                         property_data["preferred_builder"] = (
-                            "⭐ YES" if is_preferred else "No"
+                            self.is_preferred_builder(property_data["builder"])
+                            if property_data["builder"]
+                            else "No"
                         )
 
-                        # Fill remains
-                        property_data["rating"] = None
-                        property_data["places_nearby"] = None
-                        property_data["posted_date"] = None
-                        property_data["posted_by"] = None
-
-                        if self.validate_property(property_data):
-                            self.add_property("99acres", property_data)
-                            properties_found += 1
-                            scraping_status["properties_found"] = len(
-                                self.all_data["Property"]
-                            )
+                        self.add_property(property_data)
+                        properties_found += 1
 
                     except Exception as e:
+                        print(f"Error parsing property: {e}")
                         continue
 
             except Exception as e:
-                continue
+                print(f"Error scraping 99acres page {page}: {e}")
 
-        return properties_found
+            self.random_delay(2, 4)
+
+        print(f"99acres finished. Found {properties_found} properties.")
 
     def build_magicbricks_url(self, page=1):
         # Use user-provided URL that is known to work

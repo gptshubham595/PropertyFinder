@@ -193,7 +193,7 @@
             display: block;
         }
 
-        /* Always block to ensure visibility */
+        /* Ensure block to show controls */
         .results-header {
             display: flex;
             justify-content: space-between;
@@ -501,7 +501,6 @@
             allResults = [];
             document.getElementById('resultsBody').innerHTML = '';
             document.getElementById('resultCount').textContent = '0';
-            // document.getElementById('resultsSection').style.display = 'none'; // REMOVE THIS to keep table visible if desired, or keep it. I'll comment it out to be safe based on user feedback.
 
             const sites = {
                 '99acres': document.getElementById('site_99acres').checked,
@@ -572,7 +571,6 @@
                         if (isFilterEmpty()) {
                             populateTable(allResults);
                         }
-                        // Ensure section is visible
                         document.getElementById('resultsSection').style.display = 'block';
                     }
 
