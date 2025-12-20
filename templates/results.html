@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bangalore Property Results</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f4f7f6;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        h1 { color: #333; }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: 600;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn-primary {
+            background: #667eea;
+            color: white;
+            margin-left: 10px;
+        }
+        .btn-secondary {
+            background: #e0e0e0;
+            color: #333;
+        }
+        .property-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 20px;
+        }
+        .property-card {
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+            transition: transform 0.3s;
+            border-top: 4px solid transparent;
+        }
+        .property-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 30px rgba(0,0,0,0.1);
+        }
+        .property-card.preferred {
+            border-top-color: #ffd700;
+        }
+        .card-header {
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+            background: #fafafa;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .source-badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .source-99acres { background: #e3f2fd; color: #1565c0; }
+        .source-magicbricks { background: #ffebee; color: #c62828; }
+        .source-housing { background: #e8f5e9; color: #2e7d32; }
+        
+        .card-body {
+            padding: 20px;
+        }
+        .property-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #333;
+            line-height: 1.3;
+        }
+        .property-builder {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 15px;
+        }
+        .preferred-tag {
+            color: #f57f17;
+            font-weight: bold;
+            font-size: 12px;
+            margin-left: 5px;
+        }
+        .price {
+            font-size: 24px;
+            font-weight: bold;
+            color: #2e7d32;
+            margin-bottom: 15px;
+        }
+        .details-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-bottom: 15px;
+            font-size: 14px;
+        }
+        .detail-item {
+            color: #555;
+        }
+        .detail-label {
+            color: #999;
+            display: block;
+            font-size: 12px;
+        }
+        .view-btn {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            text-align: center;
+            background: #f8f9fa;
+            color: #333;
+            text-decoration: none;
+            border-radius: 5px;
+            font-weight: 600;
+            border: 1px solid #ddd;
+            transition: all 0.2s;
+        }
+        .view-btn:hover {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+        .empty-state {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 50px;
+            background: white;
+            border-radius: 10px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Property Search Results</h1>
+            <div>
+                <a href="/" class="btn btn-secondary">Back to Search</a>
+                <a href="/export" class="btn btn-primary">Export CSV</a>
+            </div>
+        </div>
+        
+        <div class="property-list">
+            {% if properties %}
+                {% for prop in properties %}
+                <div class="property-card {% if '⭐' in prop['Preferred Builder']|string %}preferred{% endif %}">
+                    <div class="card-header">
+                        <span class="source-badge source-{{ prop['Source'].lower().replace('.', '') }}">
+                            {{ prop['Source'] }}
+                        </span>
+                        {% if '⭐' in prop['Preferred Builder']|string %}
+                        <span class="preferred-tag">⭐ PREFERRED BUILDER</span>
+                        {% endif %}
+                    </div>
+                    <div class="card-body">
+                        <div class="property-title">
+                            {{ prop['Property'] or prop['Project'] or 'Details Not Available' }}
+                        </div>
+                        <div class="property-builder">
+                            {{ prop['Builder'] or 'Builder Not Specified' }}
+                        </div>
+                        
+                        <div class="price">
+                            {{ prop['Price'] or 'Price on Request' }}
+                        </div>
+                        
+                        <div class="details-grid">
+                            <div class="detail-item">
+                                <span class="detail-label">Type</span>
+                                {{ prop['BHK'] or '-' }} BHK
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">Area</span>
+                                {{ prop['Area in Sq.ft'] or '-' }}
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">RERA</span>
+                                {{ prop['RERA'] }}
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">Nearby</span>
+                                <span title="{{ prop['Places Nearby'] }}">
+                                    {{ (prop['Places Nearby'] or '-')[:15] }}...
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <a href="{{ prop['Property URL'] }}" target="_blank" class="view-btn">
+                            View Property
+                        </a>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="empty-state">
+                    <h2>No properties found</h2>
+                    <p>Try adjusting your search criteria or scraping more pages.</p>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>
