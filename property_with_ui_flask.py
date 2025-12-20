@@ -662,69 +662,277 @@ class PropertyFinder:
                     pass  # Continue even if wait times out
 
                 soup = BeautifulSoup(self.driver.page_source, "html.parser")
-                try:
+
+                # Select property cards using data-testid
+                property_boxes = soup.select("article[data-testid='card-container']")
+
+                if not property_boxes:
+                    print(f"No property boxes found on Housing page {page}")
+                    continue
+
+                print(f"Found {len(property_boxes)} property boxes on Housing")
+
+                for prop in property_boxes:
+                    if not scraping_status["running"]:
+                        break
                     try:
-                        area_elem = prop.find("div", attrs={"data-q": "builtup-area"})
+                        property_data = {}
+
+                        try:
+                            # Title
+                            title_elem = prop.select_one(
+                                "h2.title-style, [data-q='title'] h2"
+                            )
+                            property_data["property"] = (
+                                title_elem.text.strip()
+                                if title_elem
+                                else "Unknown Property"
+                            )
+                        except:
+                            property_data["property"] = "Unknown Property"
+
+                        try:
+                            # Project/Builder
+                            project_elem = prop.select_one(
+                                ".subtitle-style, [data-q='subtitle']"
+                            )
+                            property_data["project"] = (
+                                project_elem.text.strip() if project_elem else None
+                            )
+                        except:
+                            property_data["project"] = None
+
+                        property_data["builder"] = property_data["project"]
+
+                        try:
+                            # Price
+                            price_elem = prop.select_one(
+                                "[data-q='price'] .T_singlePriceStyle, .price-style"
+                            )
+                            property_data["price"] = (
+                                price_elem.text.strip() if price_elem else None
+                            )
+                        except:
+                            property_data["price"] = None
+
+                        property_data["price_numeric"] = self.extract_price_numeric(
+                            property_data["price"]
+                        )
+
+                        try:
+                            # Area
+                            area_elem = prop.select_one(
+                                "[data-q='builtup-area'] .T_primaryInfoTextStyle"
+                            )
+                            property_data["area"] = (
+                                area_elem.text.strip() if area_elem else None
+                            )
+                            property_data["area_in_sq.ft"] = property_data["area"]
+                            property_data["area_in_sq.m"] = None
+                        except:
+                            property_data["area"] = None
+                            property_data["area_in_sq.ft"] = None
+                            property_data["area_in_sq.m"] = None
+
+                        property_data["rera"] = (
+                            "Yes"
+                            if prop.find(string=re.compile("rera", re.I))
+                            else "Not Mentioned"
+                        )
+
+                        try:
+                            # URL
+                            link_elem = prop.select_one("a[data-q='title']")
+                            if link_elem and link_elem.get("href"):
+                                href = link_elem.get("href")
+                                property_data["property_url"] = (
+                                    "https://housing.com" + href
+                                    if href.startswith("/")
+                                    else href
+                                )
+                            else:
+                                property_data["property_url"] = None
+                        except:
+                            property_data["property_url"] = None
+
+                        bhk_text = f"{property_data['property']}"
+                        property_data["bhk"] = self.extract_bhk(bhk_text)
+
+                        is_preferred = self.check_preferred_builder(
+                            property_data["builder"]
+                        )
+                        property_data["preferred_builder"] = (
+                            "⭐ YES" if is_preferred else "No"
+                        )
+
+                        # Additional fields
+                        property_data["rating"] = None
+                        property_data["price_per_sq.ft"] = None
+                        property_data["places_nearby"] = None
+                        property_data["description"] = None
+                        property_data["posted_date"] = None
+                        property_data["posted_by"] = None
+
+                        if self.validate_property(property_data):
+                            self.add_property("Housing.com", property_data)
+                            properties_found += 1
+                            scraping_status["properties_found"] = len(
+                                self.all_data["Property"]
+                            )
+
+                    except Exception as e:
+                        print(f"Error parsing Housing property: {e}")
+                        continue
+
+            except Exception as e:
+                print(f"Error scraping Housing page {page}: {e}")
+                continue
+
+        return properties_found
+
+    def build_nobroker_url(self, page=1):
+        # Base URL for Bangalore 3BHK (or dynamic based on needed)
+        base = "https://www.nobroker.in/3bhk-flats-for-sale-in-bangalore_bangalore"
+
+        # Build robust URL
+        # Filter by BHK
+        bhk_codes = []
+        if isinstance(self.bedrooms, list):
+            for b in self.bedrooms:
+                if "2" in str(b):
+                    bhk_codes.append("BHK2")
+                if "3" in str(b):
+                    bhk_codes.append("BHK3")
+        else:
+            if "2" in str(self.bedrooms):
+                bhk_codes.append("BHK2")
+            if "3" in str(self.bedrooms):
+                bhk_codes.append("BHK3")
+
+        # Note: NoBroker URL structure is tricky. Using the static one and hoping for client side filtering or
+        # relying on the user provided URL is safer.
+        # But we can try to append page.
+
+        return f"{base}?pageNo={page}"
+
+    def scrape_nobroker(self, max_pages=5):
+        global scraping_status
+        scraping_status["current_site"] = "NoBroker"
+        properties_found = 0
+
+        for page in range(1, max_pages + 1):
+            if not scraping_status["running"]:
+                break
+
+            url = self.build_nobroker_url(page)
+            scraping_status["message"] = f"Scraping NoBroker page {page}/{max_pages}"
+
+            try:
+                self.driver.get(url)
+                self.random_delay(3, 5)
+
+                # Scroll to load listings
+                for _ in range(3):
+                    self.driver.execute_script("window.scrollBy(0, 800);")
+                    time.sleep(1)
+
+                soup = BeautifulSoup(self.driver.page_source, "html.parser")
+
+                # Selectors: article[id^='article_']
+                property_boxes = soup.select("article[id^='article_']")
+
+                if not property_boxes:
+                    property_boxes = soup.select(".nb__2_XSE, .nb__srp-list-item")
+
+                for prop in property_boxes:
+                    if not scraping_status["running"]:
+                        break
+
+                    try:
+                        property_data = {}
+
+                        # Title
+                        title_elem = prop.select_one("h2.heading-6 a, h2 a")
+                        property_data["property"] = (
+                            title_elem.text.strip()
+                            if title_elem
+                            else "Unknown Property"
+                        )
+
+                        # Price: #minDeposit .heading-6 span
+                        price_elem = prop.select_one(
+                            "#minDeposit .heading-6 span, [id*='deposit'] span"
+                        )
+                        property_data["price"] = (
+                            price_elem.text.strip() if price_elem else None
+                        )
+                        property_data["price_numeric"] = self.extract_price_numeric(
+                            property_data["price"]
+                        )
+
+                        # Area: #minRent #unitCode
+                        area_elem = prop.select_one(
+                            "#minRent #unitCode, [id*='rent'] div"
+                        )
                         property_data["area"] = (
                             area_elem.text.strip() if area_elem else None
                         )
                         property_data["area_in_sq.ft"] = property_data["area"]
-                    except:
-                        property_data["area"] = None
-                        property_data["area_in_sq.ft"] = None
+                        property_data["area_in_sq.m"] = None
 
-                    property_data["area_in_sq.m"] = None
-                    property_data["rating"] = None
-                    property_data["price_per_sq.ft"] = None
-                    property_data["places_nearby"] = None
-                    property_data["description"] = None
-                    property_data["posted_date"] = None
-                    property_data["posted_by"] = None
+                        # Builder/Project
+                        project_elem = prop.select_one(".heading-7 a, .nb__3V2Cj a")
+                        property_data["project"] = (
+                            project_elem.text.strip() if project_elem else None
+                        )
+                        property_data["builder"] = property_data["project"]
 
-                    property_data["rera"] = (
-                        "Yes"
-                        if prop.find(string=re.compile("rera", re.I))
-                        else "Not Mentioned"
-                    )
+                        property_data["rera"] = "Not Mentioned"
 
-                    try:
-                        # Link is usually the parent of title or explicitly data-q="title"
-                        link_elem = prop.find("a", attrs={"data-q": "title"})
-                        if link_elem and link_elem.get("href"):
-                            href = link_elem.get("href")
+                        # URL
+                        if title_elem and title_elem.get("href"):
+                            href = title_elem.get("href")
                             property_data["property_url"] = (
-                                "https://housing.com" + href
+                                "https://www.nobroker.in" + href
                                 if href.startswith("/")
                                 else href
                             )
                         else:
                             property_data["property_url"] = None
-                    except:
-                        property_data["property_url"] = None
 
-                    bhk_text = f"{property_data['property']}"
-                    property_data["bhk"] = self.extract_bhk(bhk_text)
+                        bhk_text = f"{property_data['property']}"
+                        property_data["bhk"] = self.extract_bhk(bhk_text)
 
-                    is_preferred = self.check_preferred_builder(
-                        property_data["builder"]
-                    )
-                    property_data["preferred_builder"] = (
-                        "⭐ YES" if is_preferred else "No"
-                    )
+                        property_data["preferred_builder"] = "No"
+                        if property_data["builder"]:
+                            is_pref = self.check_preferred_builder(
+                                property_data["builder"]
+                            )
+                            property_data["preferred_builder"] = (
+                                "⭐ YES" if is_pref else "No"
+                            )
 
-                    if self.validate_property(property_data):
-                        self.add_property("Housing.com", property_data)
-                        properties_found += 1
-                        scraping_status["properties_found"] = len(
-                            self.all_data["Property"]
-                        )
+                        # Defaults
+                        property_data["rating"] = None
+                        property_data["price_per_sq.ft"] = None
+                        property_data["places_nearby"] = None
+                        property_data["description"] = None
+                        property_data["posted_date"] = None
+                        property_data["posted_by"] = "Owner"
 
-                except Exception as e:
-                    continue
+                        if self.validate_property(property_data):
+                            self.add_property("NoBroker", property_data)
+                            properties_found += 1
+                            scraping_status["properties_found"] = len(
+                                self.all_data["Property"]
+                            )
+
+                    except Exception as e:
+                        continue
 
                 self.random_delay(2, 4)
-
             except Exception as e:
+                print(f"Error scraping NoBroker: {e}")
                 continue
 
         return properties_found
@@ -744,6 +952,9 @@ class PropertyFinder:
                 self.random_delay(3, 5)
             if sites.get("housing", True) and scraping_status["running"]:
                 self.scrape_housing(max_pages=pages_per_site)
+                self.random_delay(3, 5)
+            if sites.get("nobroker", True) and scraping_status["running"]:
+                self.scrape_nobroker(max_pages=pages_per_site)
         finally:
             if self.driver:
                 self.driver.quit()
@@ -851,11 +1062,18 @@ def export_csv():
 
     # Create CSV in memory
     si = io.StringIO()
-    cw = csv.writer(si)
 
-    # Get all keys from all results to ensure we have all columns
-    if not scraping_status["results"]:
-        return jsonify({"error": "No data"}), 400
+    # Get keys and use DictWriter
+    keys = scraping_status["results"][0].keys()
+    cw = csv.DictWriter(si, fieldnames=keys)
+    cw.writeheader()
+    cw.writerows(scraping_status["results"])
+
+    output = io.BytesIO()
+    output.write(si.getvalue().encode("utf-8-sig"))
+    output.seek(0)
+
+    filename = f"bangalore_properties_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
 
     return send_file(
         output, mimetype="text/csv", as_attachment=True, download_name=filename
