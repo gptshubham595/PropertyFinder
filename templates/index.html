@@ -330,6 +330,11 @@
             color: #00695c;
         }
 
+        .source-propsoch {
+            background: #fff3e0;
+            color: #ef6c00;
+        }
+
         .source-unknown {
             background: #f0f0f0;
             color: #666;
@@ -396,6 +401,8 @@
                             id="site_housing" checked style="width: auto;"> Housing.com</label>
                     <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;"><input type="checkbox"
                             id="site_nobroker" checked style="width: auto;"> NoBroker</label>
+                    <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;"><input type="checkbox"
+                            id="site_propsoch" checked style="width: auto;"> PropSoch</label>
                 </div>
             </div>
 
@@ -513,7 +520,8 @@
                 '99acres': document.getElementById('site_99acres').checked,
                 'magicbricks': document.getElementById('site_magicbricks').checked,
                 'housing': document.getElementById('site_housing').checked,
-                'nobroker': document.getElementById('site_nobroker').checked
+                'nobroker': document.getElementById('site_nobroker').checked,
+                'propsoch': document.getElementById('site_propsoch').checked
             };
 
             const payload = {

@@ -183,7 +183,11 @@ class PropertyFinder:
     def add_property(self, source, property_data):
         # Update internal data
         for key in self.all_data.keys():
-            self.all_data[key].append(property_data.get(key.lower().replace(" ", "_")))
+            col_key = key.lower().replace(" ", "_")
+            val = property_data.get(col_key)
+            if key == "Source" and val is None:
+                val = source
+            self.all_data[key].append(val)
 
         # Update global status for live updates
         global scraping_status
@@ -191,8 +195,10 @@ class PropertyFinder:
             key: property_data.get(key.lower().replace(" ", "_"))
             for key in self.all_data.keys()
         }
-        new_prop["Source"] = source
-        if "results" in scraping_status:
+        if new_prop.get("Source") is None:
+            new_prop["Source"] = source
+
+        if scraping_status.get("results") is not None:
             scraping_status["results"].append(new_prop)
 
     def validate_property(self, property_data):
@@ -937,10 +943,188 @@ class PropertyFinder:
 
         return properties_found
 
+    def build_propsoch_url(self, page=1):
+        """Build PropSoch URL based on criteria"""
+        # Default min budget from user request, max budget from instance
+        min_budget = 7500000
+        max_budget = self.budget_max if self.budget_max else 20000000
+
+        # Ensure max_budget is reasonable for PropSoch
+        if max_budget < min_budget:
+            min_budget = max_budget - 500000 if max_budget > 500000 else 0
+
+        base = "https://www.propsoch.com/buy/flat-for-sale-in-bengaluru"
+        params = [
+            f"minBudget={min_budget}",
+            f"maxBudget={max_budget}",
+            "apartments=8%2C10%2C7%2C11%2C73%2C12%2C13",
+            "sortType=popularity",
+            "sortOrder=desc",
+            "possession=any",
+            f"currentPage={page}",
+        ]
+        return f"{base}?{'&'.join(params)}"
+
+    def scrape_propsoch(self, max_pages=5):
+        """Scrape properties from PropSoch"""
+        global scraping_status
+        scraping_status["current_site"] = "PropSoch"
+        properties_found = 0
+
+        for page in range(1, max_pages + 1):
+            if not scraping_status["running"]:
+                break
+
+            url = self.build_propsoch_url(page)
+            print(f"Scraping PropSoch URL: {url}")
+            scraping_status["message"] = f"Scraping PropSoch page {page}/{max_pages}"
+
+            try:
+                self.driver.get(url)
+                self.random_delay(3, 5)
+
+                # Wait for cards to appear
+                try:
+                    WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located(
+                            (By.CSS_SELECTOR, 'a[href*="/property-for-sale-in/"]')
+                        )
+                    )
+                except:
+                    print(f"Timeout waiting for PropSoch cards on page {page}")
+                    continue
+
+                soup = BeautifulSoup(self.driver.page_source, "html.parser")
+                property_cards = soup.select('a[href*="/property-for-sale-in/"]')
+
+                print(f"Found {len(property_cards)} property cards on PropSoch")
+
+                if not property_cards:
+                    break
+
+                for card in property_cards:
+                    if not scraping_status["running"]:
+                        break
+                    try:
+                        property_data = {}
+
+                        # Extract Title
+                        title_elem = card.select_one("h3 span:first-child")
+                        if not title_elem:
+                            title_elem = card.select_one("h3")
+
+                        property_data["property"] = (
+                            title_elem.text.strip()
+                            if title_elem
+                            else "Unknown Property"
+                        )
+
+                        # Extract Price
+                        price_elem = card.select_one("h3 span.xl\\:inline")
+                        if not price_elem:
+                            # Try to find any price looking thing in H3
+                            h3_text = (
+                                card.select_one("h3").text
+                                if card.select_one("h3")
+                                else ""
+                            )
+                            # Price is often the second span or contains ₹
+                            price_elem = card.find(string=re.compile("₹"))
+
+                        property_data["price"] = (
+                            (
+                                price_elem.text.strip()
+                                if hasattr(price_elem, "text")
+                                else str(price_elem).strip()
+                            )
+                            if price_elem
+                            else None
+                        )
+
+                        property_data["price_numeric"] = self.extract_price_numeric(
+                            property_data["price"]
+                        )
+
+                        # BHK
+                        bhk_elem = card.select_one("p.truncate")
+                        if not bhk_elem:
+                            bhk_elem = card.find("p")
+
+                        property_data["bhk"] = self.extract_bhk(
+                            bhk_elem.text if bhk_elem else property_data["property"]
+                        )
+
+                        # Builder - try to extract from title
+                        property_data["builder"] = property_data["property"].split(" ")[
+                            0
+                        ]
+                        property_data["project"] = property_data["property"]
+
+                        # Location
+                        location_elem = None
+                        spans = card.find_all("span")
+                        for s in spans:
+                            if "," in s.text and "Bengaluru" in s.text:
+                                location_elem = s
+                                break
+
+                        property_data["description"] = (
+                            location_elem.text.strip() if location_elem else ""
+                        )
+
+                        # URL
+                        href = card.get("href")
+                        property_data["property_url"] = (
+                            "https://www.propsoch.com" + href
+                            if href.startswith("/")
+                            else href
+                        )
+
+                        # RERA - Not easily available on cards
+                        property_data["rera"] = "Not Mentioned"
+
+                        # Preferred Builder
+                        is_preferred = self.check_preferred_builder(
+                            property_data["property"]
+                        )
+                        property_data["preferred_builder"] = (
+                            "⭐ YES" if is_preferred else "No"
+                        )
+
+                        # Defaults
+                        property_data["rating"] = None
+                        property_data["price_per_sq.ft"] = None
+                        property_data["places_nearby"] = None
+                        property_data["posted_date"] = None
+                        property_data["posted_by"] = "PropSoch"
+
+                        if self.validate_property(property_data):
+                            self.add_property("PropSoch", property_data)
+                            properties_found += 1
+                            scraping_status["properties_found"] = len(
+                                self.all_data["Property"]
+                            )
+
+                    except Exception as e:
+                        print(f"Error parsing PropSoch property: {e}")
+                        continue
+
+            except Exception as e:
+                print(f"Error scraping PropSoch page {page}: {e}")
+                continue
+
+        return properties_found
+
     def scrape_all(self, pages_per_site=5, sites=None):
         global scraping_status
         if sites is None:
-            sites = {"99acres": True, "magicbricks": True, "housing": True}
+            sites = {
+                "99acres": True,
+                "magicbricks": True,
+                "housing": True,
+                "nobroker": True,
+                "propsoch": True,
+            }
 
         self.setup_driver()
         try:
@@ -955,6 +1139,9 @@ class PropertyFinder:
                 self.random_delay(3, 5)
             if sites.get("nobroker", True) and scraping_status["running"]:
                 self.scrape_nobroker(max_pages=pages_per_site)
+                self.random_delay(3, 5)
+            if sites.get("propsoch", True) and scraping_status["running"]:
+                self.scrape_propsoch(max_pages=pages_per_site)
         finally:
             if self.driver:
                 self.driver.quit()
@@ -996,7 +1183,16 @@ def start_scraping():
     preferred = data.get("preferred", False)
 
     # Parse website selections
-    sites = data.get("sites", {"99acres": True, "magicbricks": True, "housing": True})
+    sites = data.get(
+        "sites",
+        {
+            "99acres": True,
+            "magicbricks": True,
+            "housing": True,
+            "nobroker": True,
+            "propsoch": True,
+        },
+    )
 
     if isinstance(bhk, str):
         bhk = bhk.split(",")
